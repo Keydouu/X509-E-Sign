@@ -3,35 +3,71 @@ import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.*;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.cert.*;
+import org.bouncycastle.cert.jcajce.JcaCertStore;
 import org.bouncycastle.cert.jcajce.JcaX509CRLConverter;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.cms.*;
+import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
 import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.DigestCalculator;
+import org.bouncycastle.operator.DigestCalculatorProvider;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
+import org.bouncycastle.tsp.*;
+import org.bouncycastle.tsp.cms.CMSTimeStampedDataGenerator;
+import org.bouncycastle.util.CollectionStore;
+import org.bouncycastle.util.Store;
 import org.jetbrains.annotations.NotNull;
 
 import javax.crypto.*;
-import javax.crypto.spec.SecretKeySpec;
 import javax.security.auth.x500.X500Principal;
 import java.io.*;
 import java.math.BigInteger;
 import java.security.*;
 import java.security.cert.*;
 import java.security.cert.Certificate;
-import java.time.Instant;
-import java.util.Base64;
-import java.util.Date;
-import java.util.Locale;
+import java.util.*;
 
-public class RootCertHandler {
+public class RootInitializer {
     private static KeyStore keyStore;
-    protected final static String crlPath="C:\\Users\\Youness\\Documents\\crl.crl";
-    protected final static String crlURI="file:///C:/Users/Youness/Documents/crl.crl";
-    protected final static String rootAlias="Genesis";
-    protected final static String rootPasswordRaw="root00Passwo0ordR4awYC99_1656)('.-((-" ;
     private final static char[] keystorePassword="password_16556)('.-((-".toCharArray() ;
     private final static String keystoreFilePath = "C:\\Users\\Youness\\Documents\\kys.p12";
+    protected final static String rootAlias="Genesis";
+    protected final static char[] rootPasswordRaw="root00Passwo0ordR4awYC99_1656)('.-((-".toCharArray() ;
+    protected final static String certSignerAlias="Voucher";
+    protected final static char[] certSignerPassword="ISwearThisIsValid".toCharArray();
+    public static void initAll() {
+        File keystoreFile = new File(keystoreFilePath);
+        if(keystoreFile.exists())
+            return;
+        try {
+            keyStore = KeyStore.getInstance("PKCS12");
+            keyStore.load(null, keystorePassword);
+            keyStore.store(new FileOutputStream(keystoreFile), keystorePassword);
+            System.out.println("Keystore created at " + keystoreFilePath);
+            generateRootCert();
+
+            X509CertificatesGenerator.generateCert(RootInitializer.rootAlias, RootInitializer.rootPasswordRaw,
+                    "cn=AC Global eStamp,o=EURAFRIC INFORMATION,c=MA", 5*24*365,
+                    certSignerAlias, certSignerPassword, new KeyUsage(KeyUsage.digitalSignature | KeyUsage.keyCertSign));
+
+            X509CertificatesGenerator.generateCert(RootInitializer.rootAlias, RootInitializer.rootPasswordRaw,
+                    "cn=AC Global Time Stamp,o=EURAFRIC INFORMATION,c=MA", 5*24*365,
+                    TimeStampAuthority.timeStampAlias, TimeStampAuthority.timeStampPassword, new KeyUsage(KeyUsage.digitalSignature | KeyUsage.nonRepudiation));
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        } catch (CertificateException e) {
+            throw new RuntimeException(e);
+        } catch (KeyStoreException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private static Certificate[] getRootCert(){
         Certificate[] c;
         try {
@@ -41,9 +77,9 @@ public class RootCertHandler {
             throw new RuntimeException(e);
         }
     }
-    private static Key getRootCertKey(){
+    protected static Key getRootCertKey(){
         try {
-            return getKeyStore().getKey(rootAlias, rootPasswordRaw.toCharArray());
+            return getKeyStore().getKey(rootAlias, rootPasswordRaw);
         } catch (KeyStoreException e) {
             throw new RuntimeException(e);
         } catch (NoSuchAlgorithmException e) {
@@ -72,15 +108,15 @@ public class RootCertHandler {
             //String secretKey = "UmLMeGR1sWeuxknWbMyFJQ==";
             //System.out.println(Base64.getEncoder().encodeToString(secretKey.getEncoded()));
 
-            generateCRL(rootKeyPair.getPrivate());
+            CRL.generateCRL(rootKeyPair.getPrivate());
 
 
             BigInteger rootSerialNumber = secretKeyToSerialNumber(Base64.getEncoder().encodeToString(secretKey.getEncoded()));
             //System.out.println(rootSerialNumber);
             Date rootStartDate = new Date(System.currentTimeMillis() - 24 * 60 * 60 * 1000); //yesterday
-            Date rootEndDate = new Date(System.currentTimeMillis() + 10L * 365 * 24 * 60 * 60 * 1000); // 10 years after today
-            X500Principal rootIssuer  = new X500Principal("cn=EAI Root CA\no=EURAFRIC INFORMATION\nc=MA");
-            X500Principal rootSubject = new X500Principal("cn=EAI Root CA\no=EURAFRIC INFORMATION\nc=MA");
+            Date rootEndDate = new Date(System.currentTimeMillis() + 5L * 365 * 24 * 60 * 60 * 1000); // 10 years after today
+            X500Principal rootIssuer  = new X500Principal("cn=EAI Root CA,o=EURAFRIC INFORMATION,c=MA");
+            X500Principal rootSubject = new X500Principal("cn=EAI Root CA,o=EURAFRIC INFORMATION,c=MA");
             X509v3CertificateBuilder rootCertBuilder = new JcaX509v3CertificateBuilder(
                     rootIssuer, rootSerialNumber, rootStartDate, rootEndDate, rootSubject, rootKeyPair.getPublic());//no java.util.Locale localDate
             rootCertBuilder.addExtension(Extension.basicConstraints, true, new BasicConstraints(true));//isCA = true
@@ -89,8 +125,20 @@ public class RootCertHandler {
             //rootCertBuilder.addExtension(Extension.subjectAlternativeName, false, new GeneralName(GeneralName.dNSName, "localhost")); ???
             ASN1ObjectIdentifier cRLDistributionPoints = new ASN1ObjectIdentifier("2.5.29.31");
             DistributionPoint[] points = new DistributionPoint[1];
-            points[0] = new DistributionPoint(new DistributionPointName(new GeneralNames(new GeneralName(GeneralName.uniformResourceIdentifier, RootCertHandler.crlURI))),null, null);
+            points[0] = new DistributionPoint(new DistributionPointName(new GeneralNames(new GeneralName(GeneralName.uniformResourceIdentifier, CRL.crlURI))),null, null);
             rootCertBuilder.addExtension(cRLDistributionPoints, true, new CRLDistPoint(points));
+
+
+            // Create the Authority Key Identifier extension
+            SubjectPublicKeyInfo caPublicKeyInfo = SubjectPublicKeyInfo.getInstance(rootKeyPair.getPublic().getEncoded());
+            AuthorityKeyIdentifier authorityKeyIdentifier = new AuthorityKeyIdentifier(caPublicKeyInfo);
+
+            // Add the extension to the certificate builder
+            rootCertBuilder.addExtension(
+                    org.bouncycastle.asn1.x509.Extension.authorityKeyIdentifier,
+                    false,
+                    authorityKeyIdentifier
+            );
 
             ContentSigner rootCertSigner = new JcaContentSignerBuilder("SHA256WithRSA").build(rootKeyPair.getPrivate());
             X509CertificateHolder rootCertHolder = rootCertBuilder.build(rootCertSigner);
@@ -129,68 +177,22 @@ public class RootCertHandler {
             throw new RuntimeException(e);
         }
     }
-    protected static void generateCRL(PrivateKey pk) throws OperatorCreationException, CRLException, IOException {
-        X509v2CRLBuilder crlB= new X509v2CRLBuilder(new X500Name("cn=EAI Root CA\no=EURAFRIC INFORMATION\nc=MA"), new Date(System.currentTimeMillis()), new Locale("fr","MA"));
-        X509CRLHolder crlH = crlB.build(new JcaContentSignerBuilder("SHA256withRSA").build(pk));
-        X509CRL crl = new JcaX509CRLConverter().getCRL(crlH);
-        File crlFile = new File(crlPath);
-        if (!crlFile.getParentFile().exists()) {
-            crlFile.getParentFile().mkdirs();
-        }
-        FileOutputStream fos = new FileOutputStream(crlFile);
-        byte[] crlBytes = crl.getEncoded();
-        fos.write(crlBytes);
-        fos.close();
-    }
 
-    protected static void addToCRL(BigInteger serialNumber, Date revocationDate, int reason){
-        try {
-            FileInputStream fis = new FileInputStream(crlPath);
-            X509CRLHolder crl = new X509CRLHolder(fis);
-            X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(crl);
-            crlBuilder.addCRLEntry(serialNumber, revocationDate, reason);
-            X509CRLHolder crlH = crlBuilder.build(new JcaContentSignerBuilder("SHA256withRSA").build((PrivateKey) getRootCertKey()));
-            X509CRL x509crl = new JcaX509CRLConverter().getCRL(crlH);
-            fis.close();
-            FileOutputStream fos = new FileOutputStream("crlPath");
-            byte[] crlBytes = x509crl.getEncoded();
-            fos.write(crlBytes);
-            fos.close();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        } catch (CRLException e) {
-            throw new RuntimeException(e);
-        } catch (OperatorCreationException e) {
-            throw new RuntimeException(e);
-        }
-    }
-    protected static void insertIntoKeyStore(String alias, PrivateKey privateKey, Certificate[] chain, String password)
+    protected static void insertIntoKeyStore(String alias, PrivateKey privateKey, Certificate[] chain, char[] password)
             throws Exception {
         KeyStore keyStore=getKeyStore();
-        keyStore.setKeyEntry(alias, privateKey, password.toCharArray(), chain);
+        keyStore.setKeyEntry(alias, privateKey, password, chain);
         saveKeystore(keyStore);
     }
     @NotNull
     protected static KeyStore getKeyStore() {
         if(keyStore==null){
-
             File keystoreFile = new File(keystoreFilePath);
-
             try {
                 keyStore = KeyStore.getInstance("PKCS12");
                 if (keystoreFile.exists()) {
                     keyStore.load(new FileInputStream(keystoreFile), keystorePassword);
                     return keyStore;
-                } else {
-                    try {
-                        keyStore.load(null, keystorePassword);
-                        keyStore.store(new FileOutputStream(keystoreFile), keystorePassword);
-                        System.out.println("Keystore created at " + keystoreFilePath);
-                        generateRootCert();
-                        return keyStore;
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
                 }
             } catch (IOException e) {
                 throw new RuntimeException(e);

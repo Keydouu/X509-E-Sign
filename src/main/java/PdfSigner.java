@@ -2,49 +2,59 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.SignatureInterface;
+import org.bouncycastle.asn1.*;
+import org.bouncycastle.asn1.cms.Attribute;
+import org.bouncycastle.asn1.cms.AttributeTable;
+import org.bouncycastle.asn1.cms.Attributes;
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
 import org.bouncycastle.cert.jcajce.JcaCertStore;
 import org.bouncycastle.cms.*;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
+import org.bouncycastle.tsp.TSPException;
+import org.bouncycastle.tsp.TimeStampToken;
 
-import javax.crypto.BadPaddingException;
-import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
-import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
-import java.security.*;
 import java.security.cert.Certificate;
+import java.security.*;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.security.spec.InvalidKeySpecException;
-import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
-import java.util.Collections;
+import java.util.List;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 
 public class PdfSigner {
     public static void main(String[] args) {
+        RootInitializer.initAll();
         String alias = "AlphaTester", password="password123", path="C:\\Users\\Youness\\Downloads\\MyPdfTest.pdf";
         try {
-            if(!RootCertHandler.getKeyStore().containsAlias(alias))
-                ChildCertsHandler.generateCert(RootCertHandler.rootAlias, RootCertHandler.rootPasswordRaw, "cn=Youness", 24*365, alias, password);
+            if(!RootInitializer.getKeyStore().containsAlias(alias))
+                X509CertificatesGenerator.generateClientCert("cn=Youness,c=MA", 24*365, alias,
+                        password.toCharArray());
+            //keyEncipherment
         } catch (KeyStoreException e) {
             throw new RuntimeException(e);
         }
         try{
-            KeyStore ks = RootCertHandler.getKeyStore();
+            KeyStore ks = RootInitializer.getKeyStore();
 
             Certificate[] certChain = ks.getCertificateChain(alias);
-            X509Certificate certificate = (X509Certificate) certChain[0];
+            X509Certificate c1 = (X509Certificate) certChain[0];
+            X509Certificate c2 = (X509Certificate) certChain[1];
+            X509Certificate c3 = (X509Certificate) certChain[2];
+
 
             PrivateKey privateKey = (PrivateKey) ks.getKey(alias, password.toCharArray());
 
-            signDoc(path, certificate, privateKey);
+            signDoc(path, certChain, privateKey);
 
         } catch (UnrecoverableKeyException e) {
             throw new RuntimeException(e);
@@ -56,7 +66,8 @@ public class PdfSigner {
             throw new RuntimeException(e);
         }
     }
-    public static void signDoc(String path, X509Certificate certificate, PrivateKey privateKey){
+
+    public static void signDoc(String path, Certificate[] certChain, PrivateKey privateKey){
         PDDocument document=null;
         //FileInputStream fis;
         File signedFile= new File(path);
@@ -80,22 +91,30 @@ public class PdfSigner {
                         generator.addSignerInfoGenerator(
                                 new JcaSignerInfoGeneratorBuilder(
                                         new JcaDigestCalculatorProviderBuilder().build())
-                                        .build(signer, certificate));
-                        generator.addCertificates(new JcaCertStore(Collections.singleton(certificate)));
-                        CMSProcessableByteArray inputStream = new CMSProcessableByteArray(content.readAllBytes());
+                                        .build(signer, (X509Certificate) certChain[0]));
+                        generator.addCertificates(new JcaCertStore(Arrays.asList(certChain)));
+                        byte[] doc=content.readAllBytes();
+                        //generator.addCRL(RootInitializer.getCRLHolder());
+
+
+                        CMSProcessableByteArray inputStream = new CMSProcessableByteArray(doc);
                         CMSSignedData signedData = generator.generate(inputStream, false);
+
+                        //signedData = TimeStampAuthority.signTimeStamps(signedData);
+
                         return signedData.getEncoded();
-                    } catch (OperatorCreationException | CMSException |
-                             CertificateException e) {
+                    } catch (OperatorCreationException | CMSException | CertificateException e) {
                         throw new RuntimeException(e);
-                    }
+                    } /*catch (TSPException e) {
+                        throw new RuntimeException(e);
+                    }*/
                 }
             };
 
             document.addSignature(signature, signatureInterface);
 
             String newPath = signedFile.getParent() + "/" +
-                    signedFile.getName().replace(".", "2.");
+                    signedFile.getName().replace(".", " Signed.");
 
             document.saveIncremental(new FileOutputStream(new File(newPath)));
 
@@ -104,4 +123,5 @@ public class PdfSigner {
             throw new RuntimeException(e);
         }
     }
+
 }
