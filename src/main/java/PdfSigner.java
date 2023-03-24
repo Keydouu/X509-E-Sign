@@ -2,11 +2,7 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
 import org.apache.pdfbox.pdmodel.interactive.digitalsignature.SignatureInterface;
-import org.bouncycastle.asn1.*;
-import org.bouncycastle.asn1.cms.Attribute;
-import org.bouncycastle.asn1.cms.AttributeTable;
-import org.bouncycastle.asn1.cms.Attributes;
-import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
+import org.bouncycastle.asn1.x509.KeyUsage;
 import org.bouncycastle.cert.jcajce.JcaCertStore;
 import org.bouncycastle.cms.*;
 import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder;
@@ -15,36 +11,30 @@ import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
 import org.bouncycastle.tsp.TSPException;
-import org.bouncycastle.tsp.TimeStampToken;
 
 import java.io.*;
 import java.security.cert.Certificate;
 import java.security.*;
-import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
-import java.util.List;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 
 public class PdfSigner {
     public static void main(String[] args) {
-        RootInitializer.initAll();
+        MyInstancesManager.initialiseALl();
+
         String alias = "AlphaTester", password="password123", path="C:\\Users\\Youness\\Downloads\\MyPdfTest.pdf";
         try {
-            if(!RootInitializer.getKeyStore().containsAlias(alias))
-                X509CertificatesGenerator.generateClientCert("cn=Youness,c=MA", 24*365, alias,
-                        password.toCharArray());
+            if(!MyInstancesManager.getPKI().getKeyStore().containsAlias(alias))
+                MyInstancesManager.getCertGen().generateCert("cn=Youness,c=MA", 24*365, alias,
+                        password.toCharArray(), new KeyUsage(KeyUsage.nonRepudiation));
             //keyEncipherment
         } catch (KeyStoreException e) {
             throw new RuntimeException(e);
         }
         try{
-            KeyStore ks = RootInitializer.getKeyStore();
+            KeyStore ks = MyInstancesManager.getPKI().getKeyStore();
 
             Certificate[] certChain = ks.getCertificateChain(alias);
             X509Certificate c1 = (X509Certificate) certChain[0];
@@ -100,21 +90,22 @@ public class PdfSigner {
                         CMSProcessableByteArray inputStream = new CMSProcessableByteArray(doc);
                         CMSSignedData signedData = generator.generate(inputStream, false);
 
-                        //signedData = TimeStampAuthority.signTimeStamps(signedData);
+                        signedData = MyInstancesManager.getTSA().signTimeStamps(signedData);
+                        //Attribute tokenAttr = TimeStampAuthority.createTSTokenAttribute(signedData.getEncoded());
 
                         return signedData.getEncoded();
                     } catch (OperatorCreationException | CMSException | CertificateException e) {
                         throw new RuntimeException(e);
-                    } /*catch (TSPException e) {
+                    } catch (TSPException e) {
                         throw new RuntimeException(e);
-                    }*/
+                    }
                 }
             };
 
             document.addSignature(signature, signatureInterface);
 
             String newPath = signedFile.getParent() + "/" +
-                    signedFile.getName().replace(".", " Signed.");
+                    signedFile.getName().replace(".", " Signed2.");
 
             document.saveIncremental(new FileOutputStream(new File(newPath)));
 
