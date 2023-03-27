@@ -43,8 +43,10 @@ public class MyInstancesManager {
 
     private final static String cryptAlg="RSA";
     private final static String hashAndCryptAlg="SHA256WithRSA";
+    private final static String timeStampingHashAndCryptAlg="SHA1WithRSA";
+
     private final static ASN1ObjectIdentifier algOID = new ASN1ObjectIdentifier("2.16.840.1.101.3.4.2.1");
-    private final static String policyOid = "1.2.840.113549.1.9.16.1.4";//"1.2"; //
+    private final static String policyOid = "1.2"; //"1.2.840.113549.1.9.16.1.4";//
 
 
 
@@ -63,7 +65,7 @@ public class MyInstancesManager {
             timeStampAuthority=new TimeStampAuthority(
                     new CertificateChainAndPrivateKey(CertificateChainAndPrivateKey.toX509Chain(publicKeyInfrastructure.getKeyStore().getCertificateChain(timeStampAlias)),
                             (PrivateKey) publicKeyInfrastructure.getKeyStore().getKey(timeStampAlias, timeStampPassword)),
-                    hashAndCryptAlg, algOID, policyOid);
+                    timeStampingHashAndCryptAlg, algOID, policyOid);
 
             signingCert=new CertificateChainAndPrivateKey(CertificateChainAndPrivateKey.toX509Chain(publicKeyInfrastructure.getKeyStore().getCertificateChain(certSignerAlias)),
                     (PrivateKey) publicKeyInfrastructure.getKeyStore().getKey(certSignerAlias, certSignerPassword));

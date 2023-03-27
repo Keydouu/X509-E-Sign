@@ -2,11 +2,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.bouncycastle.asn1.*;
 import org.bouncycastle.asn1.cms.*;
-import org.bouncycastle.asn1.ess.ESSCertIDv2;
-import org.bouncycastle.asn1.ess.SigningCertificateV2;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
-import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cms.*;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoGeneratorBuilder;
 import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
@@ -16,6 +14,7 @@ import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
 import org.bouncycastle.tsp.*;
 import org.bouncycastle.tsp.cms.CMSTimeStampedDataGenerator;
+import org.bouncycastle.util.CollectionStore;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -27,110 +26,60 @@ public class TimeStampAuthority {
 
     private final ASN1ObjectIdentifier algOID;
     private final CertificateChainAndPrivateKey timeStampAuthorityCert;
-    private final String hashAndCryptAlg;
-    private final String policyOid;
-
-    //private SigningCertificateV2 signingCertAttr;
-
     private final TimeStampResponseGenerator timeStampResponseGenerator;
+    private final TimeStampTokenGenerator timeStampTokenGenerator;
     private DigestCalculator hashCalculator;
 
     public TimeStampAuthority(CertificateChainAndPrivateKey tsaCert, String hashAndCryptAlg, ASN1ObjectIdentifier algOID, String policyOid) {
         this.timeStampAuthorityCert=tsaCert;
         this.algOID=algOID;
-        this.hashAndCryptAlg=hashAndCryptAlg;
-        this.policyOid=policyOid;
-        //this.signingCertAttr=initSigningCertificate();
         try {
-            //CHECK ALG NAME
             SignerInfoGenerator signerInfoGenerator = new JcaSimpleSignerInfoGeneratorBuilder()
                     .build(hashAndCryptAlg, tsaCert.getPk(), tsaCert.getMyCert());
 
             DigestCalculatorProvider digestProvider = new JcaDigestCalculatorProviderBuilder().build();
             hashCalculator = digestProvider.get(new AlgorithmIdentifier(algOID));
 
-            //CMSTimeStampedDataGenerator cmsTimeStampedDataGenerator = new CMSTimeStampedDataGenerator();
-            //cmsTimeStampedDataGenerator.initialiseMessageImprintDigestCalculator(hashCalculator);
+            CMSTimeStampedDataGenerator cmsTimeStampedDataGenerator = new CMSTimeStampedDataGenerator();
+            cmsTimeStampedDataGenerator.initialiseMessageImprintDigestCalculator(hashCalculator);
 
-            TimeStampTokenGenerator tsTokenGen = new TimeStampTokenGenerator(signerInfoGenerator,
-                    hashCalculator, new ASN1ObjectIdentifier(policyOid));
-            /*tsTokenGen.addCertificates(new CollectionStore<>(List.of(new X509CertificateHolder(
-                    timeStampAuthorityCert.getMyCert().getEncoded()))));*/
+            timeStampTokenGenerator = new TimeStampTokenGenerator(signerInfoGenerator,
+                    hashCalculator, new ASN1ObjectIdentifier(policyOid), true);
 
+            timeStampTokenGenerator.addCertificates(new CollectionStore<>(List.of(new X509CertificateHolder(
+                    timeStampAuthorityCert.getMyCert().getEncoded()))));
 
-
-            //tsTokenGen.addCertificates(new JcaCertStore(Arrays.asList(this.timeStampAuthorityCert.getMyCertChain())));
-            //tsTokenGen.setAccuracySeconds(1);
-            tsTokenGen.setLocale(new Locale("fr","MA"));
-            //tsTokenGen.setTSA(new GeneralName(GeneralName.uniformResourceIdentifier, ));
-            //tsTokenGen.addCRLs(new JcaCertStore(Collections.singletonList(new JcaX509CRLConverter().getCRL(getCRLHolder()))));
-            //tsTokenGen.addCertificates(certs);
-            //tsTokenGen.addAttributeCertificates(certs);
-
-            /*ArrayList<X509CertificateHolder> certHL=new ArrayList<>();
-            for(X509Certificate certToInsert : certChain){
-                certHL.add(new X509CertificateHolder(certToInsert.getEncoded()));
-            }
-            tsTokenGen.addCertificates(new CollectionStore<>(certHL));*/
-
-            this.timeStampResponseGenerator = new TimeStampResponseGenerator(tsTokenGen,
-                    Set.of(algOID), TSPAlgorithms.ALLOWED);//no alg oid ?
+            this.timeStampResponseGenerator = new TimeStampResponseGenerator(timeStampTokenGenerator, TSPAlgorithms.ALLOWED);
+                   // Set.of(algOID), TSPAlgorithms.ALLOWED);//no alg oid ?
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
-    protected CMSSignedData signTimeStamps(CMSSignedData signedData)
-            throws IOException, TSPException {
+    protected CMSSignedData signTimeStamps(CMSSignedData signedData) throws IOException, TSPException {
         SignerInformationStore signerStore = signedData.getSignerInfos();
-        List<SignerInformation> newSigners = new ArrayList<>();
-
         for (SignerInformation signer : signerStore.getSigners())
-        {
             signerStore= new SignerInformationStore(signTimeStamp(signer));
-        }
-
         // TODO do we have to return a new store?
         return CMSSignedData.replaceSigners(signedData, signerStore);
     }
-    private SignerInformation signTimeStamp(SignerInformation signer)
-            throws IOException, TSPException
-    {
+    private SignerInformation signTimeStamp(SignerInformation signer) throws IOException {
         AttributeTable unsignedAttributes = signer.getUnsignedAttributes();
-
         ASN1EncodableVector vector = new ASN1EncodableVector();
         if (unsignedAttributes != null)
-        {
             vector = unsignedAttributes.toASN1EncodableVector();
-        }
-
-        //TimeStampToken toooken = TimeStampAuthority.generateTimeStamp(signer.getSignature());
-        //System.out.println(convertToJSON(toooken));
-        //Attribute tokenAttr = TimeStampAuthority.createTSTokenAttribute(signer.getSignature());
-        byte[] token = sendRequest(signer.getSignature()).getTimeStampToken().getEncoded();
-        ASN1ObjectIdentifier oid = PKCSObjectIdentifiers.id_aa_signatureTimeStampToken;
-        ASN1Encodable signatureTimeStamp = new Attribute(oid, new DERSet(ASN1Primitive.fromByteArray(token)));
-
+        TimeStampResponse tsr = sendRequest(signer.getSignature());
+        TimeStampToken tst=tsr.getTimeStampToken();
+        ASN1Encodable signatureTimeStamp = new Attribute(PKCSObjectIdentifiers.id_aa_signatureTimeStampToken, new DERSet(ASN1Primitive.fromByteArray(tst.getEncoded())));
         vector.add(signatureTimeStamp);
-        Attributes signedAttributes = new Attributes(vector);
-
-        SignerInformation newSigner = SignerInformation.replaceUnsignedAttributes(
-                signer, new AttributeTable(vector));
-
-        // TODO can this actually happen?
-        if (newSigner == null)
-        {
-            System.out.println("new Signer is null");
-            return signer;
-        }
-
+        SignerInformation newSigner = SignerInformation.replaceUnsignedAttributes(signer, new AttributeTable(vector));
         return newSigner;
     }
 
 
     public TimeStampResponse sendRequest(byte[] dataToStamp){
         TimeStampRequestGenerator reqGen = new TimeStampRequestGenerator();
-        //reqGen.setCertReq(true);
+        reqGen.setCertReq(true);
         TimeStampRequest request = reqGen.generate(algOID, hash(dataToStamp));
         return generateTSResponse(request);
     }
@@ -151,12 +100,11 @@ public class TimeStampAuthority {
     }
 
     private TimeStampResponse generateTSResponse(TimeStampRequest timeStampRequest) {
-        BigInteger tspResponseSerial = BigInteger.valueOf(generateTimeStampSerialNumber());
+        BigInteger tspResponseSerial = generateTimeStampSerialNumber();
         Date receptionTime = new Date();
         TimeStampResponse tspResponse = null;
         try {
-            tspResponse = timeStampResponseGenerator.generate(timeStampRequest, tspResponseSerial,
-                    receptionTime);
+            tspResponse = timeStampResponseGenerator.generate(timeStampRequest, tspResponseSerial,receptionTime);
         } catch (TSPException e) {
             throw new RuntimeException(e);
         }
@@ -164,32 +112,8 @@ public class TimeStampAuthority {
     }
 
     //REDO LATER
-    private long generateTimeStampSerialNumber (){
-        return new java.util.Random().nextLong();
-    }
-
-    private SigningCertificateV2 SigningCertificateV2(){
-        ESSCertIDv2 eSSCertID = null;
-        try {
-            eSSCertID = new ESSCertIDv2(new AlgorithmIdentifier(algOID) ,hash(timeStampAuthorityCert.getMyCert().getEncoded()));
-        } catch (CertificateEncodingException e) {
-            throw new RuntimeException(e);
-        }
-
-        return new SigningCertificateV2(eSSCertID);
-    }
-    private SignerInfo getSignerInfo(byte[] hash){
-        X509Certificate rootCert = (this.timeStampAuthorityCert.getMyCertChain()[this.timeStampAuthorityCert.getMyCertChain().length-1]);
-        IssuerAndSerialNumber issuerAndId= new IssuerAndSerialNumber(
-                new X500Name(rootCert.getSubjectX500Principal().getName())
-                , timeStampAuthorityCert.getMyCert().getSerialNumber());
-        SignerIdentifier sigId;
-        sigId = new SignerIdentifier(issuerAndId);
-        //sigId = new SignerIdentifier(SubjectPublicKeyInfo.getInstance(this.timeStampAuthorityCert.getMyCert().getPublicKey().getEncoded()).toASN1Primitive());
-        //or maybe certChain(length-1)?
-        SignerInfo sigInfo = new SignerInfo(sigId, new AlgorithmIdentifier(algOID), new DERSet(), new AlgorithmIdentifier(PKCSObjectIdentifiers.rsaEncryption),
-                ASN1OctetString.getInstance(hash), new DERSet());
-        return sigInfo;
+    private BigInteger generateTimeStampSerialNumber() {
+        return BigInteger.valueOf(new java.util.Random().nextLong());
     }
 
     public static String convertToJSON(TimeStampToken token) {
